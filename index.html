@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hybrid Code Editor Pro</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.36.1/min/vs/loader.min.js"></script>
+    <style>
+        body { background: #1a1a1a; color: #d4d4d4; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+        #editor-container { flex: 1; border-top: 1px solid #333; }
+        
+        /* Modal Styles */
+        #output-modal { display: none; position: fixed; inset: 0; z-index: 1000; }
+        .modal-overlay { position: absolute; inset: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(4px); }
+        .modal-body { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; border-radius: 12px; overflow: hidden; display: flex; flex-direction: column; transition: all 0.3s ease; }
+        
+        /* Device Sizes */
+        .view-pc { width: 90vw; height: 85vh; }
+        .view-mobile { width: 375px; height: 667px; }
+        .view-tablet { width: 768px; height: 1024px; scale: 0.8; }
+
+        .tab-active { background: #2d2d2d; color: #60a5fa; border-bottom: 2px solid #60a5fa; }
+    </style>
+</head>
+<body>
+
+    <!-- Top Bar -->
+    <div class="h-14 bg-[#252526] flex items-center justify-between px-4 border-b border-black">
+        <div class="flex items-center gap-2">
+            <div class="flex bg-[#1e1e1e] rounded overflow-hidden border border-[#3c3c3c]">
+                <button onclick="switchTab('html')" id="tab-html" class="px-4 py-2 text-xs font-medium tab-active transition-all">HTML / ALL</button>
+                <button onclick="switchTab('css')" id="tab-css" class="px-4 py-2 text-xs font-medium text-gray-400 hover:bg-[#2d2d2d]">CSS</button>
+                <button onclick="switchTab('javascript')" id="tab-js" class="px-4 py-2 text-xs font-medium text-gray-400 hover:bg-[#2d2d2d]">JS</button>
+            </div>
+            <span class="text-[10px] text-gray-500 ml-2 hidden md:block">Tip: Type '!' and press Tab for boilerplate</span>
+        </div>
+
+        <button onclick="runCode()" class="bg-[#0e639c] hover:bg-[#1177bb] text-white px-6 py-1.5 rounded text-sm font-bold flex items-center gap-2 transition-transform active:scale-95 shadow-lg">
+            <span>RUN</span>
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+        </button>
+    </div>
+
+    <!-- Main Editor -->
+    <div id="editor-container"></div>
+
+    <!-- Status Bar -->
+    <div class="h-6 bg-[#007acc] text-white text-[11px] flex items-center px-3 justify-between">
+        <div class="flex gap-4">
+            <span id="editor-status">Ready</span>
+            <span id="cursor-pos">Ln 1, Col 1</span>
+        </div>
+        <div>UTF-8 | HTML5</div>
+    </div>
+
+    <!-- Output Modal -->
+    <div id="output-modal">
+        <div class="modal-overlay" onclick="closeModal()"></div>
+        <div id="modal-container" class="modal-body view-pc">
+            <div class="h-10 bg-[#333] flex items-center justify-between px-4 text-white">
+                <div class="flex gap-4 text-[11px]">
+                    <button onclick="resizeModal('mobile')" class="hover:text-blue-400">Mobile</button>
+                    <button onclick="resizeModal('tablet')" class="hover:text-blue-400">Tablet</button>
+                    <button onclick="resizeModal('pc')" class="hover:text-blue-400">Desktop</button>
+                </div>
+                <button onclick="closeModal()" class="text-red-400 font-bold">✕</button>
+            </div>
+            <iframe id="output-frame" class="w-full flex-1 bg-white"></iframe>
+        </div>
+    </div>
+
+    <script>
+        let editor;
+        let models = {};
+
+        // Default Code with "In-One-File" example
+        const initialCode = {
+            html: `<!DOCTYPE html>\n<html>\n<head>\n  <title>One File Mode</title>\n  <style>\n    body { background: #f4f4f4; font-family: sans-serif; text-align: center; }\n    h1 { color: #333; }\n  </style>\n</head>\n<body>\n\n  <h1>Sab kuch ek file mein!</h1>\n  <p>Aap yahan <script> bhi likh sakte hain.</p>\n\n  <script>\n    console.log("Hello from inside HTML!");\n  <\/script>\n</body>\n</html>`,
+            css: `/* Agar yahan likhenge toh ye bhi apply hoga */\nh1 { text-transform: uppercase; }`,
+            javascript: `// External JS Tab\nconsole.log("JS Tab active");`
+        };
+
+        require.config({ paths: { 'vs': 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.36.1/min/vs' }});
+        require(['vs/editor/editor.main'], function() {
+            
+            // Registering Emmet-like Snippets for "!" or "doc"
+            monaco.languages.registerCompletionItemProvider('html', {
+                provideCompletionItems: () => {
+                    const suggestions = [
+                        {
+                            label: '!',
+                            kind: monaco.languages.CompletionItemKind.Snippet,
+                            insertText: [
+                                '<!DOCTYPE html>',
+                                '<html lang="en">',
+                                '<head>',
+                                '    <meta charset="UTF-8">',
+                                '    <meta name="viewport" content="width=device-width, initial-scale=1.0">',
+                                '    <title>${1:Document}</title>',
+                                '</head>',
+                                '<body>',
+                                '    $0',
+                                '</body>',
+                                '</html>'
+                            ].join('\n'),
+                            insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+                            documentation: 'HTML5 Boilerplate'
+                        },
+                        {
+                            label: 'doc',
+                            kind: monaco.languages.CompletionItemKind.Snippet,
+                            insertText: '<!DOCTYPE html>\n<html lang="en">\n<head>\n    <meta charset="UTF-8">\n    <title>Document</title>\n</head>\n<body>\n    $0\n</body>\n</html>',
+                            insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+                            documentation: 'Standard HTML Doc'
+                        }
+                    ];
+                    return { suggestions: suggestions };
+                }
+            });
+
+            // Create Models
+            models.html = monaco.editor.createModel(initialCode.html, 'html');
+            models.css = monaco.editor.createModel(initialCode.css, 'css');
+            models.javascript = monaco.editor.createModel(initialCode.javascript, 'javascript');
+
+            editor = monaco.editor.create(document.getElementById('editor-container'), {
+                model: models.html,
+                theme: 'vs-dark',
+                fontSize: 14,
+                fontFamily: 'Consolas, "Courier New", monospace',
+                automaticLayout: true,
+                autoClosingBrackets: 'always',
+                autoClosingTags: true,
+                formatOnType: true,
+                minimap: { enabled: true },
+                suggestOnTriggerCharacters: true
+            });
+
+            // Status Bar Updates
+            editor.onDidChangeCursorPosition(e => {
+                document.getElementById('cursor-pos').innerText = `Ln ${e.position.lineNumber}, Col ${e.position.column}`;
+            });
+        });
+
+        function switchTab(lang) {
+            editor.setModel(models[lang]);
+            
+            // Tab styling
+            document.querySelectorAll('button[id^="tab-"]').forEach(btn => {
+                btn.className = "px-4 py-2 text-xs font-medium text-gray-400 hover:bg-[#2d2d2d]";
+            });
+            document.getElementById(`tab-${lang === 'javascript' ? 'js' : lang}`).className = "px-4 py-2 text-xs font-medium tab-active transition-all";
+        }
+
+        function runCode() {
+            // Get data from all models
+            const html = models.html.getValue();
+            const css = `<style>${models.css.getValue()}</style>`;
+            const js = `<script>${models.javascript.getValue()}<\/script>`;
+            
+            const frame = document.getElementById('output-frame');
+            const doc = frame.contentWindow.document;
+            
+            doc.open();
+            // Note: If user already has tags in HTML model, they will merge
+            doc.write(html + css + js);
+            doc.close();
+
+            document.getElementById('output-modal').style.display = 'block';
+        }
+
+        function closeModal() {
+            document.getElementById('output-modal').style.display = 'none';
+        }
+
+        function resizeModal(size) {
+            const container = document.getElementById('modal-container');
+            container.className = "modal-body"; // reset
+            if(size === 'mobile') container.classList.add('view-mobile');
+            else if(size === 'tablet') container.classList.add('view-tablet');
+            else container.classList.add('view-pc');
+        }
+    </script>
+</body>
+</html>
+
